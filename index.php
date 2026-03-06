@@ -142,5 +142,217 @@ if ($request_uri === '/api/debug') {
     exit;
 }
 
+// VULNERABILITY: XXE Injection (CWE-611)
+if ($request_uri === '/api/parse-xml' && $request_method === 'POST') {
+    $xml = file_get_contents('php://input');
+    // Vulnerable: libxml_disable_entity_loader not called
+    $doc = new DOMDocument();
+    $doc->loadXML($xml, LIBXML_NOENT | LIBXML_DTDLOAD);
+    echo json_encode(['parsed' => true]);
+    exit;
+}
+
+// VULNERABILITY: YAML Deserialization (CWE-502)
+if ($request_uri === '/api/parse-yaml' && $request_method === 'POST') {
+    $yaml = file_get_contents('php://input');
+    // Vulnerable: Unsafe YAML parsing (if yaml extension loaded)
+    // This would execute arbitrary PHP code embedded in YAML
+    echo json_encode(['yaml' => $yaml, 'vulnerable' => true]);
+    exit;
+}
+
+// VULNERABILITY: Mass Assignment (CWE-915)
+if ($request_uri === '/api/register' && $request_method === 'POST') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    // Vulnerable: Allows setting 'role' field directly
+    $new_user = [
+        'id' => count($users) + 1,
+        'username' => $data['username'] ?? '',
+        'password' => password_hash($data['password'] ?? '', PASSWORD_DEFAULT),
+        'email' => $data['email'] ?? '',
+        'role' => $data['role'] ?? 'user' // Attacker can set role=admin
+    ];
+    $users[] = $new_user;
+    echo json_encode(['success' => true, 'user' => $new_user]);
+    exit;
+}
+
+// VULNERABILITY: IDOR (Insecure Direct Object Reference) (CWE-639)
+if (preg_match('#^/api/users/(\d+)$#', $request_uri, $matches)) {
+    $user_id = (int)$matches[1];
+    // Vulnerable: No authorization check
+    $user = null;
+    foreach ($users as $u) {
+        if ($u['id'] === $user_id) {
+            $user = $u;
+            break;
+        }
+    }
+    echo json_encode(['user' => $user]);
+    exit;
+}
+
+// VULNERABILITY: Missing Authentication (CWE-306)
+if (preg_match('#^/api/admin/users/(\d+)$#', $request_uri, $matches) && $request_method === 'DELETE') {
+    $user_id = (int)$matches[1];
+    // Vulnerable: No authentication or authorization required
+    $users = array_filter($users, function($u) use ($user_id) {
+        return $u['id'] !== $user_id;
+    });
+    echo json_encode(['success' => true, 'deleted' => $user_id]);
+    exit;
+}
+
+// VULNERABILITY: Unrestricted File Upload (CWE-434)
+if ($request_uri === '/api/upload' && $request_method === 'POST') {
+    // Vulnerable: No file type validation
+    if (isset($_FILES['file'])) {
+        $upload_dir = './uploads/';
+        $upload_file = $upload_dir . basename($_FILES['file']['name']);
+        move_uploaded_file($_FILES['file']['tmp_name'], $upload_file);
+        echo json_encode(['success' => true, 'path' => $upload_file]);
+    } else {
+        echo json_encode(['error' => 'No file uploaded']);
+    }
+    exit;
+}
+
+// VULNERABILITY: Open Redirect (CWE-601)
+if ($request_uri === '/api/redirect') {
+    $url = $_GET['url'] ?? 'https://example.com';
+    // Vulnerable: No validation of redirect URL
+    header("Location: $url");
+    exit;
+}
+
+// VULNERABILITY: LDAP Injection (CWE-90)
+if ($request_uri === '/api/ldap-search') {
+    $username = $_GET['username'] ?? '';
+    // Vulnerable: Direct interpolation into LDAP query
+    $ldap_query = "(&(objectClass=user)(username=$username))";
+    echo json_encode(['query' => $ldap_query, 'vulnerable' => true]);
+    exit;
+}
+
+// VULNERABILITY: XPATH Injection (CWE-643)
+if ($request_uri === '/api/xpath-search') {
+    $name = $_GET['name'] ?? '';
+    // Vulnerable: User input in XPath query
+    $xpath = "//user[name='$name']";
+    echo json_encode(['xpath' => $xpath, 'vulnerable' => true]);
+    exit;
+}
+
+// VULNERABILITY: Server-Side Template Injection (CWE-1336)
+if ($request_uri === '/api/template' && $request_method === 'POST') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $template = $data['template'] ?? '';
+    // Vulnerable: Eval-based template rendering
+    ob_start();
+    eval('?>' . $template);
+    $output = ob_get_clean();
+    echo json_encode(['output' => $output]);
+    exit;
+}
+
+// VULNERABILITY: Race Condition (CWE-362)
+if ($request_uri === '/api/transfer' && $request_method === 'POST') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $from = $data['from'] ?? '';
+    $to = $data['to'] ?? '';
+    $amount = $data['amount'] ?? 0;
+    // Vulnerable: No locking, allows race conditions
+    // Check balance (time window for race condition)
+    usleep(100000); // 100ms delay
+    // Perform transfer
+    echo json_encode(['success' => true, 'transferred' => $amount]);
+    exit;
+}
+
+// VULNERABILITY: Insufficient Logging (CWE-778)
+if ($request_uri === '/api/sensitive-operation' && $request_method === 'POST') {
+    // Vulnerable: No logging of sensitive operations
+    $data = json_decode(file_get_contents('php://input'), true);
+    // Perform sensitive operation without audit trail
+    echo json_encode(['success' => true]);
+    exit;
+}
+
+// VULNERABILITY: Insecure Randomness (CWE-330)
+if ($request_uri === '/api/generate-token') {
+    // Vulnerable: Using predictable random
+    $token = md5(rand());
+    echo json_encode(['token' => $token, 'algorithm' => 'rand()+md5']);
+    exit;
+}
+
+// VULNERABILITY: Integer Overflow (CWE-190)
+if ($request_uri === '/api/calculate') {
+    $a = (int)($_GET['a'] ?? 0);
+    $b = (int)($_GET['b'] ?? 0);
+    // Vulnerable: No overflow checking
+    $result = $a * $b;
+    echo json_encode(['result' => $result]);
+    exit;
+}
+
+// VULNERABILITY: Use of Hard-coded Password (CWE-259)
+if ($request_uri === '/api/admin-login' && $request_method === 'POST') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $password = $data['password'] ?? '';
+    // Vulnerable: Hardcoded admin password
+    if ($password === ADMIN_PASSWORD) {
+        echo json_encode(['success' => true, 'role' => 'admin']);
+    } else {
+        echo json_encode(['success' => false]);
+    }
+    exit;
+}
+
+// VULNERABILITY: Information Exposure Through Error Messages (CWE-209)
+if ($request_uri === '/api/database-connect') {
+    // Vulnerable: Detailed error messages exposed
+    try {
+        $conn = new PDO("mysql:host=localhost;dbname=testdb", "root", DB_PASSWORD);
+        echo json_encode(['success' => true]);
+    } catch (PDOException $e) {
+        // Vulnerable: Exposes database structure and credentials
+        echo json_encode(['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+    }
+    exit;
+}
+
+// VULNERABILITY: Missing Rate Limiting (CWE-770)
+if ($request_uri === '/api/brute-force-target' && $request_method === 'POST') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $password = $data['password'] ?? '';
+    // Vulnerable: No rate limiting, allows brute force
+    if ($password === 'correct_password') {
+        echo json_encode(['success' => true]);
+    } else {
+        echo json_encode(['success' => false]);
+    }
+    exit;
+}
+
+// VULNERABILITY: Cleartext Transmission of Sensitive Information (CWE-319)
+if ($request_uri === '/api/send-credentials' && $request_method === 'POST') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    // Vulnerable: Credentials sent in cleartext (if not using HTTPS)
+    $username = $data['username'] ?? '';
+    $password = $data['password'] ?? '';
+    echo json_encode(['received' => true, 'username' => $username]);
+    exit;
+}
+
+// VULNERABILITY: Use of GET Request Method With Sensitive Query Strings (CWE-598)
+if (strpos($request_uri, '/api/reset-password') === 0) {
+    $token = $_GET['token'] ?? '';
+    $new_password = $_GET['password'] ?? '';
+    // Vulnerable: Sensitive data in GET parameters (appears in logs)
+    echo json_encode(['success' => true, 'token' => $token]);
+    exit;
+}
+
 echo json_encode(['error' => 'Not found']);
 ?>
